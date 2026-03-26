@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-个人量化模拟交易系统 v4.0 - 小白友好版
+个人量化模拟交易系统 v5.0 - 小白友好版（含163邮件通知）
 ✅ RSI + MACD + PE + 成交量 四因子
 ✅ 真实 T+1 限制（今日买，明日才能卖）
 ✅ 生成 HTML 图表 + Excel 报告
-✅ 支持 GitHub Actions 自动运行
+✅ 支持 --notify 发送163邮箱通知
 """
 
 import backtrader as bt
@@ -16,6 +16,10 @@ import sys
 import argparse
 import datetime
 import shutil
+import smtplib
+from email.mime.text import MIMEText
+from email.header import Header
+
 
 # === 风控常量 ===
 MAX_POSITION_PER_STOCK = 0.30
@@ -277,12 +281,59 @@ def export_to_excel(report, filename):
     print(f"📊 Excel 报告已保存: {filename}")
 
 
+def send_notification_email(report, recipients=None):
+    """
+    使用 163 邮箱发送量化报告通知（HTML格式）
+    """
+    sender = os.getenv("EMAIL_USER", "your_email@163.com")
+    password = os.getenv("EMAIL_PASSWORD", "your_authorization_code")
+    smtp_server = "smtp.163.com"
+    smtp_port = 465
+
+    if recipients is None:
+        recipients = [sender]
+
+    subject = f"📈 量化日报 | 净值: ¥{report['final_value']:,.2f} | 收益率: {report['total_return_pct']:.2f}%"
+    body = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6;">
+        <h2>📊 个人量化模拟交易日报</h2>
+        <p><strong>初始资金：</strong>¥{report['initial_value']:,.2f}</p>
+        <p><strong>当前净值：</strong>¥{report['final_value']:,.2f}</p>
+        <p><strong>总收益率：</strong>{report['total_return_pct']:.2f}%</p>
+        <p><strong>最大回撤：</strong>{report['max_drawdown_pct']:.2f}%</p>
+        <p><strong>风控状态：</strong>{"⚠️ 已触发清仓" if report['drawdown_triggered'] else "🟢 正常"}</p>
+        <p>详细报告请查看 GitHub Pages 页面或附件。</p>
+        <hr>
+        <small>策略：四因子选股（RSI+MACD+PE+成交量） | 严格 T+1 限制</small>
+    </body>
+    </html>
+    """
+
+    msg = MIMEText(body, 'html', 'utf-8')
+    msg['From'] = Header(f"量化机器人 <{sender}>", 'utf-8')
+    msg['To'] = Header("; ".join(recipients), 'utf-8')
+    msg['Subject'] = Header(subject, 'utf-8')
+
+    try:
+        with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
+            server.login(sender, password)
+            server.sendmail(sender, recipients, msg.as_string())
+        print("📧 邮件通知已发送！")
+        return True
+    except Exception as e:
+        print(f"❌ 邮件发送失败（不影响主程序）: {e}")
+        return False
+
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='多因子量化回测系统')
+    parser = argparse.ArgumentParser(description='多因子量化回测系统（支持163邮件通知）')
     parser.add_argument('--symbols', type=str, default='600519.SS,000858.SZ',
-                        help='A股代码用 .SS（沪市）或 .SZ（深市）')
+                        help='A股代码用 .SS（沪市）或 .SZ（深市），多个用逗号分隔')
     parser.add_argument('--start', type=str, default='2025-01-01', help='回测开始日期')
     parser.add_argument('--cash', type=float, default=100000.0, help='初始资金')
+    parser.add_argument('--notify', action='store_true',
+                        help='启用163邮箱通知（需设置 EMAIL_USER 和 EMAIL_PASSWORD 环境变量）')
     args = parser.parse_args()
 
     symbols = [s.strip() for s in args.symbols.split(',') if s.strip()]
@@ -309,6 +360,10 @@ if __name__ == '__main__':
         shutil.copy(html_file, latest_file)
         print(f"🔗 已更新最新报告: {latest_file}")
 
+        # 发送邮件（如果启用）
+        if args.notify:
+            send_notification_email(report)
+
         # 打印简要结果
         print("\n✅ 回测完成！")
         print(f"初始资金: ¥{report['initial_value']:,.2f}")
@@ -317,5 +372,5 @@ if __name__ == '__main__':
         print(f"最大回撤: {report['max_drawdown_pct']:.2f}%")
 
     except Exception as e:
-        print(f"❌ 错误: {e}", file=sys.stderr)
+        print(f"❌ 主程序错误: {e}", file=sys.stderr)
         sys.exit(1)
