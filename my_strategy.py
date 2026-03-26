@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-量化回测策略主程序
+量化回测策略主程序（全中文报告 + 163邮箱通知）
 功能：
-- 每日自动下载股票数据（通过 yfinance）
-- 运行简单均线交叉策略
-- 生成中文日志报告
-- 支持 --notify 参数发送邮箱通知（仅邮件，无微信）
+- 下载股票数据（yfinance）
+- 运行5日/20日均线交叉策略
+- 生成中文回测报告
+- 支持 --notify 发送163邮箱通知
 
 作者：你的名字
 最后更新：2026-03-26
@@ -42,18 +42,26 @@ class SimpleSMACross(bt.Strategy):
 
 
 def run_backtest(symbol="600519.SS", start_date="2025-01-01", cash=100000.0):
-    """运行回测并返回最终资金和中文日志内容"""
+    """运行回测，返回最终资金和中文报告文本"""
+    # 确保 symbol 是干净字符串
+    symbol = str(symbol).strip()
+    if not symbol:
+        raise ValueError("股票代码不能为空")
+
     cerebro = bt.Cerebro()
     cerebro.addstrategy(SimpleSMACross)
     cerebro.broker.setcash(cash)
 
-    data = yf.download(
-        symbol,
-        start=start_date,
-        end=datetime.datetime.today().strftime("%Y-%m-%d"),
-        progress=False
-    )
-    
+    try:
+        data = yf.download(
+            symbol,
+            start=start_date,
+            end=datetime.datetime.today().strftime("%Y-%m-%d"),
+            progress=False
+        )
+    except Exception as e:
+        raise RuntimeError(f"下载 {symbol} 数据时出错: {e}")
+
     if data.empty:
         raise ValueError(f"❌ 无法获取 {symbol} 的数据，请检查股票代码或网络连接")
 
@@ -80,8 +88,7 @@ def run_backtest(symbol="600519.SS", start_date="2025-01-01", cash=100000.0):
 
 
 def send_email(subject, body):
-    """发送中文邮件（专为 163 邮箱优化）"""
-    # 安全获取环境变量：转字符串 + 去空格
+    """发送中文邮件（专为163邮箱优化）"""
     email_user = str(os.getenv("EMAIL_USER", "")).strip()
     email_pass = str(os.getenv("EMAIL_PASS", "")).strip()
     to_email = str(os.getenv("TO_EMAIL", "")).strip()
@@ -90,7 +97,6 @@ def send_email(subject, body):
         print("⚠️ 未配置完整的邮箱信息（EMAIL_USER / EMAIL_PASS / TO_EMAIL），跳过邮件通知")
         return
 
-    # 163 邮箱固定配置（SSL + 端口 465）
     smtp_server = "smtp.163.com"
     port = 465
 
@@ -98,9 +104,7 @@ def send_email(subject, body):
     msg['From'] = email_user
     msg['To'] = to_email
     msg['Subject'] = subject
-
-    # 关键：指定 'utf-8' 编码，确保中文不乱码
-    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))  # 关键：UTF-8 编码
 
     try:
         with smtplib.SMTP_SSL(smtp_server, port) as server:
@@ -112,31 +116,39 @@ def send_email(subject, body):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='量化回测策略（中文报告）')
+    parser = argparse.ArgumentParser(description='量化回测策略（中文报告 + 163邮箱）')
     parser.add_argument('--symbol', type=str, default='600519.SS', help='股票代码 (默认: 贵州茅台)')
     parser.add_argument('--start', type=str, default='2025-01-01', help='回测开始日期')
     parser.add_argument('--cash', type=float, default=100000.0, help='初始资金（人民币）')
     parser.add_argument('--notify', action='store_true', help='发送中文邮箱通知')
     args = parser.parse_args()
 
+    # 🔥 关键修复：防止 symbol 被传为元组或含逗号字符串
+    symbol_clean = str(args.symbol).strip()
+    if ',' in symbol_clean:
+        symbol_clean = symbol_clean.split(',')[0].strip()  # 只取第一个
+    if not symbol_clean:
+        print("❌ 股票代码无效", file=sys.stderr)
+        sys.exit(1)
+
     os.makedirs("logs", exist_ok=True)
     log_file = f"logs/run_{datetime.datetime.now().strftime('%Y%m%d')}.log"
 
     try:
         final_value, report_text = run_backtest(
-            symbol=args.symbol,
+            symbol=symbol_clean,
             start_date=args.start,
             cash=args.cash
         )
 
         with open(log_file, "w", encoding="utf-8") as f:
             f.write(report_text)
-        
+
         print(f"✅ 回测完成！中文报告已保存至: {log_file}")
         print(report_text)
 
         if args.notify:
-            title = f"📈 量化回测报告 - {datetime.date.today()} | {args.symbol}"
+            title = f"📈 量化回测报告 - {datetime.date.today()} | {symbol_clean}"
             send_email(title, report_text)
 
     except Exception as e:
@@ -144,4 +156,4 @@ if __name__ == '__main__':
         print(error_msg, file=sys.stderr)
         if args.notify:
             send_email("🚨 量化回测失败", error_msg)
-        sys.exit(1)
+        sys.exit(1)  # 确保 GitHub Actions 标记为失败
