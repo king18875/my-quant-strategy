@@ -1,24 +1,14 @@
-import os
-from datetime import datetime
-# 确保 logs 目录存在
-os.makedirs("logs", exist_ok=True)
-
-# 示例：保存一份报告
-with open("logs/report.txt", "w") as f:
-    f.write("量化策略运行成功！\n")
-    f.write(f"日期: {datetime.now()}\n")
-    # ... 其他内容
 # -*- coding: utf-8 -*-
 """
 量化回测策略主程序
 功能：
 - 每日自动下载股票数据（通过 yfinance）
 - 运行简单均线交叉策略
-- 生成日志报告
-- 支持 --notify 参数发送微信 + 邮箱通知
+- 生成中文日志报告
+- 支持 --notify 参数发送邮箱通知（仅邮件，无微信）
 
 作者：你的名字
-最后更新：2026-03-25
+最后更新：2026-03-26
 """
 
 import backtrader as bt
@@ -28,7 +18,6 @@ import os
 import sys
 import argparse
 import smtplib
-import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -52,14 +41,12 @@ class SimpleSMACross(bt.Strategy):
             self.close()
 
 
-def run_backtest(symbol="AAPL", start_date="2025-01-01", cash=100000.0):
-    """运行回测并返回最终资金和日志内容"""
-    # 创建 Cerebro 引擎
+def run_backtest(symbol="600519.SS", start_date="2025-01-01", cash=100000.0):
+    """运行回测并返回最终资金和中文日志内容"""
     cerebro = bt.Cerebro()
     cerebro.addstrategy(SimpleSMACross)
     cerebro.broker.setcash(cash)
 
-    # 下载数据（yfinance 自动处理时区）
     data = yf.download(
         symbol,
         start=start_date,
@@ -68,103 +55,70 @@ def run_backtest(symbol="AAPL", start_date="2025-01-01", cash=100000.0):
     )
     
     if data.empty:
-        raise ValueError(f"❌ 无法获取 {symbol} 的数据，请检查代码或网络")
+        raise ValueError(f"❌ 无法获取 {symbol} 的数据，请检查股票代码或网络连接")
 
-    # 转换为 Backtrader 数据格式
     data_feed = bt.feeds.PandasData(dataname=data)
     cerebro.adddata(data_feed)
 
-    # 运行回测
     initial_value = cerebro.broker.getvalue()
     cerebro.run()
     final_value = cerebro.broker.getvalue()
 
-    # 生成报告文本
     log_lines = []
-    log_lines.append(f"📊 量化回测报告")
-    log_lines.append(f"股票代码: {symbol}")
-    log_lines.append(f"回测周期: {start_date} 至 {datetime.date.today()}")
-    log_lines.append(f"初始资金: ${initial_value:.2f}")
-    log_lines.append(f"最终资金: ${final_value:.2f}")
-    log_lines.append(f"收益率: {(final_value / initial_value - 1) * 100:.2f}%")
+    log_lines.append("📊 量化回测报告")
+    log_lines.append(f"股票代码：{symbol}")
+    log_lines.append(f"回测周期：{start_date} 至 {datetime.date.today()}")
+    log_lines.append(f"初始资金：¥{initial_value:,.2f}")
+    log_lines.append(f"最终资金：¥{final_value:,.2f}")
+    log_lines.append(f"总收益率：{(final_value / initial_value - 1) * 100:.2f}%")
     log_lines.append("=" * 40)
-    log_lines.append("策略: 5日/20日均线交叉")
+    log_lines.append("策略说明：5日与20日均线金叉/死叉交易策略")
+    log_lines.append("• 金叉（短均上穿长均）→ 买入")
+    log_lines.append("• 死叉（短均下穿长均）→ 卖出")
 
     return final_value, "\n".join(log_lines)
 
 
-def send_wechat(title, content):
-    """通过 Server 酱发送微信通知"""
-    sckey = os.getenv("SCKEY")
-    if not sckey:
-        print("⚠️ 未配置 Server 酱 SCKEY，跳过微信通知")
-        return
-    url = f"https://sctapi.ftqq.com/{sckey}.send"
-    data = {
-        "title": title,
-        "desp": content
-    }
-    try:
-        resp = requests.post(url, data=data, timeout=10)
-        if resp.json().get("code") == 0:
-            print("✅ 微信通知已发送")
-        else:
-            print(f"❌ 微信通知失败: {resp.text}")
-    except Exception as e:
-        print(f"❌ 微信通知异常: {e}")
-
-
 def send_email(subject, body):
-    """发送邮件（支持 Gmail / QQ 邮箱）"""
-    email_user = os.getenv("EMAIL_USER")
-    email_pass = os.getenv("EMAIL_PASS")
-    to_email = os.getenv("TO_EMAIL")
-    
+    """发送中文邮件（专为 163 邮箱优化）"""
+    # 安全获取环境变量：转字符串 + 去空格
+    email_user = str(os.getenv("EMAIL_USER", "")).strip()
+    email_pass = str(os.getenv("EMAIL_PASS", "")).strip()
+    to_email = str(os.getenv("TO_EMAIL", "")).strip()
+
     if not all([email_user, email_pass, to_email]):
-        print("⚠️ 未配置邮箱信息，跳过邮件通知")
+        print("⚠️ 未配置完整的邮箱信息（EMAIL_USER / EMAIL_PASS / TO_EMAIL），跳过邮件通知")
         return
 
-    # 自动判断邮箱类型
-    if "gmail.com" in email_user:
-        smtp_server = "smtp.gmail.com"
-        port = 587
-    elif "qq.com" in email_user:
-        smtp_server = "smtp.qq.com"
-        port = 587
-    elif "outlook.com" in email_user or "hotmail.com" in email_user:
-        smtp_server = "smtp-mail.outlook.com"
-        port = 587
-    else:
-        # 默认使用 Gmail 设置
-        smtp_server = "smtp.gmail.com"
-        port = 587
+    # 163 邮箱固定配置（SSL + 端口 465）
+    smtp_server = "smtp.163.com"
+    port = 465
 
     msg = MIMEMultipart()
     msg['From'] = email_user
     msg['To'] = to_email
     msg['Subject'] = subject
+
+    # 关键：指定 'utf-8' 编码，确保中文不乱码
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
     try:
-        server = smtplib.SMTP(smtp_server, port)
-        server.starttls()
-        server.login(email_user, email_pass)
-        server.sendmail(email_user, to_email, msg.as_string())
-        server.quit()
-        print("✅ 邮件已发送")
+        with smtplib.SMTP_SSL(smtp_server, port) as server:
+            server.login(email_user, email_pass)
+            server.sendmail(email_user, to_email, msg.as_string())
+        print("✅ 中文邮件已成功发送到", to_email)
     except Exception as e:
         print(f"❌ 邮件发送失败: {e}")
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='量化回测策略')
+    parser = argparse.ArgumentParser(description='量化回测策略（中文报告）')
     parser.add_argument('--symbol', type=str, default='600519.SS', help='股票代码 (默认: 贵州茅台)')
     parser.add_argument('--start', type=str, default='2025-01-01', help='回测开始日期')
-    parser.add_argument('--cash', type=float, default=100000.0, help='初始资金')
-    parser.add_argument('--notify', action='store_true', help='发送微信和邮箱通知')
+    parser.add_argument('--cash', type=float, default=100000.0, help='初始资金（人民币）')
+    parser.add_argument('--notify', action='store_true', help='发送中文邮箱通知')
     args = parser.parse_args()
 
-    # 创建 logs 目录
     os.makedirs("logs", exist_ok=True)
     log_file = f"logs/run_{datetime.datetime.now().strftime('%Y%m%d')}.log"
 
@@ -175,23 +129,19 @@ if __name__ == '__main__':
             cash=args.cash
         )
 
-        # 保存日志到文件
         with open(log_file, "w", encoding="utf-8") as f:
             f.write(report_text)
         
-        print(f"✅ 回测完成！报告已保存至: {log_file}")
+        print(f"✅ 回测完成！中文报告已保存至: {log_file}")
         print(report_text)
 
-        # 发送通知
         if args.notify:
             title = f"📈 量化回测报告 - {datetime.date.today()} | {args.symbol}"
-            send_wechat(title, report_text)
             send_email(title, report_text)
 
     except Exception as e:
         error_msg = f"❌ 回测失败: {str(e)}"
-        print(error_msg)
-        # 即使失败也尝试通知
+        print(error_msg, file=sys.stderr)
         if args.notify:
-            send_wechat("🚨 量化回测失败", error_msg)
             send_email("🚨 量化回测失败", error_msg)
+        sys.exit(1)
