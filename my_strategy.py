@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-个人量化模拟交易系统 v5.0 - 小白友好版（含163邮件通知）
-✅ RSI + MACD + PE + 成交量 四因子
-✅ 真实 T+1 限制（今日买，明日才能卖）
-✅ 生成 HTML 图表 + Excel 报告
-✅ 支持 --notify 发送163邮箱通知
+个人量化模拟交易系统 v6.0 - 全面适配 AKShare（A股专用）
+✅ 数据源：AKShare（支持 600519.SS / 000858.SZ 等 A 股）
+✅ 策略：RSI + MACD + 成交量 + 静态 PE（手动维护）
+✅ 严格 T+1 限制
+✅ 邮件通知 via 163（需设置环境变量）
+✅ 生成 Excel + HTML 报告
 """
 
 import backtrader as bt
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import os
@@ -20,6 +20,16 @@ import smtplib
 from email.mime.text import MIMEText
 from email.header import Header
 
+# === 手动维护的静态 PE 字典（可按需扩展）===
+# 来源：2025年报/2026Q1 估算，单位：倍
+STATIC_PE_MAP = {
+    '600519': 30.5,   # 贵州茅台
+    '000858': 22.3,   # 五粮液
+    '601318': 8.7,    # 中国平安
+    '000001': 5.2,    # 平安银行
+    '600036': 6.1,    # 招商银行
+    '300750': 28.9,   # 宁德时代
+}
 
 # === 风控常量 ===
 MAX_POSITION_PER_STOCK = 0.30
@@ -40,18 +50,18 @@ class MultiFactorStrategy(bt.Strategy):
         self.last_rebalance = None
         self.peak_value = self.broker.getvalue()
         self.drawdown_triggered = False
-        self.last_buy_date = {}  # 记录每只股票最近买入日期（用于T+1）
+        self.last_buy_date = {}  # T+1 记录
 
         # 指标字典
         self.rsi = {}
         self.macd = {}
         self.macd_signal = {}
-        self.pe_ratio = {}
         self.vol_ma5 = {}
         self.vol_ma20 = {}
 
         for d in self.datas:
             symbol = d._name
+            clean_code = symbol.split('.')[0]
             # RSI
             self.rsi[symbol] = bt.indicators.RSI(d.close, period=self.p.rsi_period)
             # MACD
@@ -66,14 +76,9 @@ class MultiFactorStrategy(bt.Strategy):
             # 成交量 MA5 / MA20
             self.vol_ma5[symbol] = bt.indicators.SMA(d.volume, period=5)
             self.vol_ma20[symbol] = bt.indicators.SMA(d.volume, period=20)
-            # PE（从 yfinance 获取）
-            try:
-                yf_symbol = symbol.replace('.SS', '.SH')
-                ticker = yf.Ticker(yf_symbol)
-                pe = ticker.info.get('trailingPE', np.nan)
-            except:
-                pe = np.nan
-            self.pe_ratio[symbol] = pe
+            # PE（从静态字典获取）
+            pe_val = STATIC_PE_MAP.get(clean_code, np.nan)
+            setattr(self, f'pe_{symbol}', pe_val)
 
     def next(self):
         current_date = self.datas[0].datetime.date(0)
@@ -89,7 +94,6 @@ class MultiFactorStrategy(bt.Strategy):
         else:
             self.drawdown_triggered = False
 
-        # 调仓逻辑（每5天一次）
         if self.last_rebalance is None or (current_date - self.last_rebalance).days >= self.p.rebalance_days:
             self.rebalance_portfolio(current_date)
 
@@ -97,12 +101,13 @@ class MultiFactorStrategy(bt.Strategy):
         scores = {}
         for d in self.datas:
             symbol = d._name
+            clean_code = symbol.split('.')[0]
             rsi_val = self.rsi[symbol][0]
             macd_val = self.macd[symbol][0]
             signal_val = self.macd_signal[symbol][0]
             vol5 = self.vol_ma5[symbol][0]
             vol20 = self.vol_ma20[symbol][0]
-            pe_val = self.pe_ratio[symbol]
+            pe_val = getattr(self, f'pe_{symbol}', np.nan)
 
             score = 0
 
@@ -116,7 +121,7 @@ class MultiFactorStrategy(bt.Strategy):
             if macd_val > signal_val and self.macd[symbol][-1] <= self.macd_signal[symbol][-1]:
                 score += 0.8
 
-            # PE 估值（越低越好）
+            # PE 估值（越低越好，仅当有值时）
             if not np.isnan(pe_val) and pe_val > 0 and pe_val < 100:
                 pe_score = max(0, 1.0 - (pe_val / 30))
                 score += pe_score * 0.5
@@ -151,9 +156,8 @@ class MultiFactorStrategy(bt.Strategy):
                 size = int(diff / d.close[0])
                 if size > 0:
                     self.buy(data=d, size=size)
-                    self.last_buy_date[symbol] = current_date  # 记录买入日期
+                    self.last_buy_date[symbol] = current_date
             elif diff < 0:
-                # ✅ T+1 检查：今天不能卖“今天刚买的”
                 can_sell = True
                 if symbol in self.last_buy_date:
                     buy_date = self.last_buy_date[symbol]
@@ -167,17 +171,25 @@ class MultiFactorStrategy(bt.Strategy):
         self.last_rebalance = current_date
 
     def notify_order(self, order):
-        pass  # 无需额外处理
+        pass
 
 
+# ========================
+# 数据加载（使用 AKShare）
+# ========================
 def load_or_download_data(symbols, start_date, end_date, cache_dir="data"):
+    import akshare as ak
     os.makedirs(cache_dir, exist_ok=True)
     datas = []
 
     for symbol in symbols:
-        cache_file = os.path.join(cache_dir, f"{symbol.replace('.', '_')}.csv")
+        clean_code = symbol.split('.')[0]
+        market_suffix = symbol.split('.')[1] if '.' in symbol else 'SS'
+
+        cache_file = os.path.join(cache_dir, f"{clean_code}.csv")
         df = None
 
+        # 尝试加载缓存
         if os.path.exists(cache_file):
             try:
                 df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
@@ -185,18 +197,41 @@ def load_or_download_data(symbols, start_date, end_date, cache_dir="data"):
                     print(f"💾 使用缓存: {symbol}")
                 else:
                     df = None
-            except:
+            except Exception as e:
+                print(f"⚠️ 缓存读取失败 {symbol}: {e}")
                 df = None
 
+        # 下载新数据
         if df is None:
-            print(f"🌐 下载: {symbol}")
+            print(f"🌐 通过 AKShare 下载: {symbol} ({clean_code})")
             try:
-                yf_symbol = symbol.replace('.SS', '.SH')
-                df = yf.download(yf_symbol, start=start_date, end=end_date, progress=False)
-                if not df.empty:
-                    df.to_csv(cache_file)
+                df = ak.stock_zh_a_hist(
+                    symbol=clean_code,
+                    period="daily",
+                    start_date=start_date.replace('-', ''),
+                    end_date=end_date.replace('-', ''),
+                    adjust="qfq"
+                )
+                if df.empty:
+                    raise ValueError("返回空数据")
+
+                # 重命名列
+                df.rename(columns={
+                    '日期': 'date',
+                    '开盘': 'open',
+                    '收盘': 'close',
+                    '最高': 'high',
+                    '最低': 'low',
+                    '成交量': 'volume'
+                }, inplace=True)
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+
+                # 保存缓存
+                df.to_csv(cache_file)
+                print(f"✅ 下载成功: {symbol}")
             except Exception as e:
-                print(f"⚠️ {symbol} 下载失败: {e}")
+                print(f"❌ {symbol} 下载失败: {e}")
                 continue
 
         if df is not None and not df.empty:
@@ -212,7 +247,7 @@ def run_simulation(symbols, start_date, cash=100000.0):
     datas = load_or_download_data(symbols, start_date, end_date)
 
     if not datas:
-        raise ValueError("无有效数据")
+        raise ValueError("无有效数据，请检查股票代码格式（如 600519.SS）")
 
     cerebro = bt.Cerebro()
     cerebro.addstrategy(MultiFactorStrategy)
@@ -282,9 +317,6 @@ def export_to_excel(report, filename):
 
 
 def send_notification_email(report, recipients=None):
-    """
-    使用 163 邮箱发送量化报告通知（HTML格式）
-    """
     sender = os.getenv("EMAIL_USER", "your_email@163.com")
     password = os.getenv("EMAIL_PASSWORD", "your_authorization_code")
     smtp_server = "smtp.163.com"
@@ -303,9 +335,9 @@ def send_notification_email(report, recipients=None):
         <p><strong>总收益率：</strong>{report['total_return_pct']:.2f}%</p>
         <p><strong>最大回撤：</strong>{report['max_drawdown_pct']:.2f}%</p>
         <p><strong>风控状态：</strong>{"⚠️ 已触发清仓" if report['drawdown_triggered'] else "🟢 正常"}</p>
-        <p>详细报告请查看 GitHub Pages 页面或附件。</p>
+        <p>详细报告请查看附件或 GitHub Pages 页面。</p>
         <hr>
-        <small>策略：四因子选股（RSI+MACD+PE+成交量） | 严格 T+1 限制</small>
+        <small>策略：四因子选股（RSI+MACD+PE+成交量） | 严格 T+1 限制 | 数据源：AKShare</small>
     </body>
     </html>
     """
@@ -326,11 +358,14 @@ def send_notification_email(report, recipients=None):
         return False
 
 
+# ========================
+# 主程序入口
+# ========================
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='多因子量化回测系统（支持163邮件通知）')
+    parser = argparse.ArgumentParser(description='A股多因子量化回测系统（基于 AKShare）')
     parser.add_argument('--symbols', type=str, default='600519.SS,000858.SZ',
-                        help='A股代码用 .SS（沪市）或 .SZ（深市），多个用逗号分隔')
-    parser.add_argument('--start', type=str, default='2025-01-01', help='回测开始日期')
+                        help='A股代码，格式：600519.SS（沪市）或 000858.SZ（深市），多个用逗号分隔')
+    parser.add_argument('--start', type=str, default='2025-01-01', help='回测开始日期（YYYY-MM-DD）')
     parser.add_argument('--cash', type=float, default=100000.0, help='初始资金')
     parser.add_argument('--notify', action='store_true',
                         help='启用163邮箱通知（需设置 EMAIL_USER 和 EMAIL_PASSWORD 环境变量）')
@@ -338,7 +373,6 @@ if __name__ == '__main__':
 
     symbols = [s.strip() for s in args.symbols.split(',') if s.strip()]
     today = datetime.date.today()
-
     os.makedirs("reports", exist_ok=True)
     excel_file = f"reports/report_{today}.xlsx"
 
@@ -346,25 +380,23 @@ if __name__ == '__main__':
         report = run_simulation(symbols, args.start, args.cash)
         export_to_excel(report, excel_file)
 
-        # 生成 HTML 报告
-        from utils.html_report import generate_html_report
-        html_content, _ = generate_html_report(report)
+        # 尝试生成 HTML 报告（如果 utils/html_report 存在）
+        try:
+            from utils.html_report import generate_html_report
+            html_content, _ = generate_html_report(report)
+            html_file = f"reports/report_{today}.html"
+            with open(html_file, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            shutil.copy(html_file, "reports/latest.html")
+            print(f"🌐 HTML 报告已保存: {html_file}")
+        except ImportError:
+            print("ℹ️ 未找到 utils/html_report.py，跳过 HTML 报告生成")
 
-        html_file = f"reports/report_{today}.html"
-        with open(html_file, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        print(f"🌐 HTML 报告已保存: {html_file}")
-
-        # 创建 latest.html
-        latest_file = "reports/latest.html"
-        shutil.copy(html_file, latest_file)
-        print(f"🔗 已更新最新报告: {latest_file}")
-
-        # 发送邮件（如果启用）
+        # 发送邮件
         if args.notify:
             send_notification_email(report)
 
-        # 打印简要结果
+        # 打印结果
         print("\n✅ 回测完成！")
         print(f"初始资金: ¥{report['initial_value']:,.2f}")
         print(f"当前净值: ¥{report['final_value']:,.2f}")
