@@ -1,3 +1,13 @@
+import os
+
+# 确保 logs 目录存在
+os.makedirs("logs", exist_ok=True)
+
+# 示例：保存一份报告
+with open("logs/report.txt", "w") as f:
+    f.write("量化策略运行成功！\n")
+    f.write(f"日期: {datetime.now()}\n")
+    # ... 其他内容
 # -*- coding: utf-8 -*-
 """
 量化回测策略主程序
