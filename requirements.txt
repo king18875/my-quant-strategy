@@ -1,3 +1,4 @@
 akshare
 backtrader==1.9.77.123
 pandas
+quantstats
