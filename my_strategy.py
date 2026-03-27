@@ -3,19 +3,8 @@ import akshare as ak
 import pandas as pd
 import datetime
 import os
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
-import quantstats as qs
 
 # ================= 1. 全局配置区 =================
-# 这里的参数在 GitHub 环境变量中配置，本地运行若没配置则使用默认值
-EMAIL_USER = os.getenv("EMAIL_USER", "你的QQ邮箱@qq.com")
-EMAIL_PASS = os.getenv("EMAIL_PASS", "你的SMTP授权码")
-EMAIL_TO = os.getenv("EMAIL_TO", "你的接收邮箱@qq.com")
-
 # 回测时间设置 (GitHub Actions 建议只跑最近 6 个月，防止超时)
 END_DATE = datetime.datetime.now().strftime("%Y%m%d")
 START_DATE = (datetime.datetime.now() - datetime.timedelta(days=180)).strftime("%Y%m%d")
@@ -59,37 +48,7 @@ class SimpleStrategy(bt.Strategy):
                 print(f'📉 卖出: {self.data._name} @ {self.data.close[0]:.2f}')
                 self.order = self.close()
 
-# ================= 4. 报表生成与邮件发送 =================
-def send_email_report(stats, filename):
-    try:
-        print("📧 正在发送邮件报告...")
-        msg = MIMEMultipart()
-        msg['From'] = EMAIL_USER
-        msg['To'] = EMAIL_TO
-        msg['Subject'] = f"量化策略日报 - {datetime.date.today()}"
-
-        # 邮件正文
-        body = f"你好，\n\n今日策略回测已完成。请查看附件中的详细 Excel 报告。\n\n当前净值: {stats['broker_value']:.2f}"
-        msg.attach(MIMEText(body, 'plain', 'utf-8'))
-
-        # 添加附件
-        with open(filename, "rb") as attachment:
-            part = MIMEBase('application', 'octet-stream')
-            part.set_payload(attachment.read())
-        
-        encoders.encode_base64(part)
-        part.add_header('Content-Disposition', f"attachment; filename= {filename}")
-        msg.attach(part)
-
-        # 发送
-        server = smtplib.SMTP_SSL("smtp.qq.com", 465)
-        server.login(EMAIL_USER, EMAIL_PASS)
-        server.send_message(msg)
-        server.quit()
-        print("✅ 邮件发送成功！")
-    except Exception as e:
-        print(f"❌ 邮件发送失败: {e}")
-
+# ================= 4. 报表生成 (仅生成 Excel，不再发送邮件) =================
 def run_job():
     cerebro = bt.Cerebro()
     cerebro.addstrategy(SimpleStrategy)
@@ -121,40 +80,49 @@ def run_job():
     os.makedirs('reports', exist_ok=True)
     excel_file = 'reports/Strategy_Report.xlsx'
     
-    # 提取数据
-    pyfolio_stats = strat.analyzers.getbyname('pyfolio')
-    returns, positions, transactions, gross_lev = pyfolio_stats.get_pf_items()
-    
-    # 创建 Excel Writer
-    with pd.ExcelWriter(excel_file) as writer:
-        # Sheet 1: 核心指标
-        summary_data = {
-            '指标名称': ['总收益(%)', '夏普比率', '最大回撤(%)', '最终净值'],
-            '数值': [
-                f"{strat.analyzers.returns.get_analysis()['rtot']:.2f}",
-                f"{strat.analyzers.sharpe.get_analysis()['sharperatio']:.2f}",
-                f"{strat.analyzers.drawdown.get_analysis()['max']['drawdown']:.2f}",
-                f"{final_value:.2f}"
-            ]
-        }
-        pd.DataFrame(summary_data).to_excel(writer, sheet_name='核心指标', index=False)
+    try:
+        # 提取数据
+        pyfolio_stats = strat.analyzers.getbyname('pyfolio')
+        returns, positions, transactions, gross_lev = pyfolio_stats.get_pf_items()
         
-        # Sheet 2: 每日收益
-        returns_df = pd.DataFrame(returns)
-        returns_df.columns = ['每日收益']
-        returns_df.index = returns_df.index.tz_localize(None) # 去除时区
-        returns_df.to_excel(writer, sheet_name='每日收益')
-        
-        # Sheet 3: 交易记录
-        trans_df = pd.DataFrame(transactions)
-        trans_df.index = trans_df.index.tz_localize(None)
-        trans_df.to_excel(writer, sheet_name='交易明细')
+        # 创建 Excel Writer
+        with pd.ExcelWriter(excel_file) as writer:
+            # Sheet 1: 核心指标 (中文表头)
+            sharpe_val = strat.analyzers.sharpe.get_analysis().get('sharperatio', 0)
+            drawdown_val = strat.analyzers.drawdown.get_analysis()['max']['drawdown']
+            total_return = strat.analyzers.returns.get_analysis().get('rtot', 0)
+            
+            summary_data = {
+                '指标名称': ['总收益(%)', '夏普比率', '最大回撤(%)', '最终净值'],
+                '数值': [
+                    f"{total_return:.2f}",
+                    f"{sharpe_val:.2f}",
+                    f"{drawdown_val:.2f}",
+                    f"{final_value:.2f}"
+                ]
+            }
+            pd.DataFrame(summary_data).to_excel(writer, sheet_name='核心指标', index=False)
+            
+            # Sheet 2: 每日收益
+            returns_df = pd.DataFrame(returns)
+            returns_df.columns = ['每日收益']
+            # 去除时区，防止 Excel 报错
+            returns_df.index = returns_df.index.tz_localize(None)
+            returns_df.to_excel(writer, sheet_name='每日收益')
+            
+            # Sheet 3: 交易记录
+            if not transactions.empty:
+                trans_df = pd.DataFrame(transactions)
+                trans_df.index = trans_df.index.tz_localize(None)
+                trans_df.to_excel(writer, sheet_name='交易明细')
+            else:
+                pd.DataFrame({'提示': ['无交易记录']}).to_excel(writer, sheet_name='交易明细')
 
-    print(f"✅ Excel 报告已生成: {excel_file}")
-    
-    # 4. 发送邮件 (如果在本地运行没有配置环境变量，这一步会跳过或报错，但在 GitHub 上会运行)
-    if os.getenv("EMAIL_PASS"):
-        send_email_report({'broker_value': final_value}, excel_file)
+        print(f"✅ Excel 报告已生成: {excel_file}")
+        print("🚀 报告将自动上传至 GitHub Actions Artifacts，请在运行页面下载。")
+        
+    except Exception as e:
+        print(f"❌ 报告生成失败: {e}")
 
 if __name__ == '__main__':
     run_job()

@@ -1,45 +1,36 @@
-name: Quant Strategy CI/CD
+name: Quant Strategy CI
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch: # 允许手动触发
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
-    env:
-      PYTHON_VERSION: "3.10"
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    # 1. 检出代码
+    - uses: actions/checkout@v3
 
-      - name: Check Python version
-        run: |
-          python --version
-          pip --version
+    # 2. 设置 Python 环境
+    - name: Set up Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: '3.10'
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-          - name: Install Dependencies
+    # 3. 安装依赖 (注意：这里增加了 openpyxl 用于生成 Excel)
+    - name: Install Dependencies
       run: |
-        pip install backtrader akshare pandas numpy quantstats openpyxl
+        pip install backtrader akshare pandas numpy quantstats openpyxl matplotlib
 
-      - name: Run strategy
-        run: |
-          python my_strategy.py --notify
-        env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+    # 4. 运行策略
+    - name: Run Strategy
+      run: python my_strategy.py
 
-      - name: Upload report
-        uses: actions/upload-artifact@v4
-        with:
-          name: reports
-          path: reports/
+    # 5. 上传 Excel 报告 (关键步骤)
+    - name: Upload Excel Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: Strategy-Report
+        path: reports/Strategy_Report.xlsx
