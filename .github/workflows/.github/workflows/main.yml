@@ -25,9 +25,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies
-        run: |
-          pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+          - name: Install Dependencies
+      run: |
+        pip install backtrader akshare pandas numpy quantstats openpyxl
 
       - name: Run strategy
         run: |
