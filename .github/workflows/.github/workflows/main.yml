@@ -19,7 +19,7 @@ jobs:
       with:
         python-version: '3.10'
 
-    # 3. 安装依赖 (注意：这里增加了 openpyxl 用于生成 Excel)
+    # 3. 安装依赖
     - name: Install Dependencies
       run: |
         pip install backtrader akshare pandas numpy quantstats openpyxl matplotlib
@@ -32,5 +32,6 @@ jobs:
     - name: Upload Excel Report
       uses: actions/upload-artifact@v4
       with:
-        name: Strategy-Report
+        # 这里使用了 CloudSync 文件夹名，并加上了时间戳防止重复
+        name: CloudSync-Report-${{ github.run_number }}
         path: reports/Strategy_Report.xlsx
