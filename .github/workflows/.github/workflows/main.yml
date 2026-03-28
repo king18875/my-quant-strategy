@@ -7,7 +7,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 【关键修复】强制使用 ubuntu-22.04，避开 Ubuntu 24.04 的兼容性坑
+    runs-on: ubuntu-22.04
     
     steps:
     # 1. 检出代码
@@ -22,16 +23,16 @@ jobs:
     # 3. 安装依赖
     - name: Install Dependencies
       run: |
-        pip install backtrader akshare pandas numpy quantstats openpyxl matplotlib
+        # 增加 --prefer-offline 加快安装速度，减少超时
+        pip install backtrader akshare pandas numpy quantstats openpyxl matplotlib --prefer-offline
 
     # 4. 运行策略
     - name: Run Strategy
       run: python my_strategy.py
 
-    # 5. 上传 Excel 报告 (关键步骤)
+    # 5. 上传 Excel 报告
     - name: Upload Excel Report
       uses: actions/upload-artifact@v4
       with:
-        # 这里使用了 CloudSync 文件夹名，并加上了时间戳防止重复
         name: CloudSync-Report-${{ github.run_number }}
         path: reports/Strategy_Report.xlsx
