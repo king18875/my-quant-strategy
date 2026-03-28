@@ -3,36 +3,37 @@ name: Quant Strategy CI
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build:
-    # 【关键修复】强制使用 ubuntu-22.04，避开 Ubuntu 24.04 的兼容性坑
+    # 使用稳定的 Ubuntu 22.04
     runs-on: ubuntu-22.04
     
     steps:
-    # 1. 检出代码
-    - uses: actions/checkout@v3
+    # 1. 检出代码 (更新到 v5)
+    - uses: actions/checkout@v5
 
-    # 2. 设置 Python 环境
+    # 2. 设置 Python 环境 (更新到 v5)
     - name: Set up Python
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
     # 3. 安装依赖
     - name: Install Dependencies
       run: |
-        # 增加 --prefer-offline 加快安装速度，减少超时
         pip install backtrader akshare pandas numpy quantstats openpyxl matplotlib --prefer-offline
 
     # 4. 运行策略
     - name: Run Strategy
       run: python my_strategy.py
 
-    # 5. 上传 Excel 报告
+    # 5. 上传报告 (更新到 v5)
     - name: Upload Excel Report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: CloudSync-Report-${{ github.run_number }}
-        path: reports/Strategy_Report.xlsx
+        path: |
+          reports/Strategy_Report.xlsx
+          logs/
