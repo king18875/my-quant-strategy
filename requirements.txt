@@ -1,5 +1,6 @@
-akshare
-backtrader==1.9.77.123
+akshare==0.20.2
+yfinance==0.2.38
+backtrader==1.9.77.142
 pandas==2.1.4
 numpy==1.26.4
 openpyxl==3.1.2
