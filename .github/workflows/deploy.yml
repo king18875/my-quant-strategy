@@ -1,0 +1,42 @@
+name: Deploy Quant Report to GitHub Pages
+
+on:
+  schedule:
+    - cron: '0 1 * * *'  # UTC 1点 = 北京时间9点
+  workflow_dispatch:     # 手动触发按钮
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install backtrader yfinance pandas numpy plotly openpyxl
+
+      - name: Run quant system
+        run: |
+          mkdir -p utils reports data
+          python my_strategy.py --symbols "600519.SS,000858.SZ,601318.SS"
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'reports/'
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
