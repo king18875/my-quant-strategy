@@ -1,5 +1,5 @@
 pandas==2.2.3
-yfinance==0.2.38
+yfinance==0.2.78
 akshare==1.17.76
 backtrader==1.9.78.123
 numpy==1.26.4
