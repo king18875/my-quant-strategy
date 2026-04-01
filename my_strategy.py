@@ -1,3 +1,15 @@
+import os
+import sys
+
+# 获取当前脚本所在目录
+script_dir = os.path.dirname(os.path.abspath(__file__))
+print(f"当前脚本所在目录: {script_dir}")
+
+# 确保文件路径正确
+file_path = os.path.join(script_dir, "my_strategy.py")
+print(f"预期文件路径: {file_path}")
+
+# 你的代码...
 # -*- coding: utf-8 -*-
 """
 量化回测策略主程序
