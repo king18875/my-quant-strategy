@@ -1,0 +1,42 @@
+name: Quant Strategy CI
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+      # 1. 检出代码
+      - uses: actions/checkout@v5
+
+      # 2. 设置 Python 环境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 3. 升级 pip 并安装依赖（使用 requirements.txt）
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # （可选）调试：列出已安装的包
+      - name: Debug: List installed packages
+        run: pip list
+
+      # 4. 运行策略脚本
+      - name: Run Strategy
+        run: python my_strategy.py --notify
+
+      # 5. 上传 Excel 报告（确保 reports/ 目录存在）
+      - name: Upload Excel Report
+        uses: actions/upload-artifact@v5
+        if: always()  # 即使脚本失败也尝试上传（方便排查）
+        with:
+          name: CloudSync-Report-${{ github.run_number }}
+          path: reports/Strategy_Report.xlsx
